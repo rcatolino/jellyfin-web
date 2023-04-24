@@ -123,7 +123,7 @@ function getItemsForPlayback(serverId, query) {
         } else {
             query.Limit = query.Limit || 300;
         }
-        query.Fields = 'Chapters';
+        query.Fields = 'Chapters,Path';
         query.ExcludeLocationTypes = 'Virtual';
         query.EnableTotalRecordCount = false;
         query.CollapseBoxSetItems = false;
@@ -2771,13 +2771,15 @@ class PlaybackManager {
             const serverItem = isServerItem(item);
             return getAutomaticPlayers(self, forceLocalPlayers).filter(function (p) {
                 if (p.canPlayMediaType(item.MediaType)) {
-                    if (serverItem) {
+                    if (serverItem && item.LocationType !== "Remote") {
                         if (p.canPlayItem) {
                             return p.canPlayItem(item, playOptions);
                         }
                         return true;
                     } else if (item.Url && p.canPlayUrl) {
                         return p.canPlayUrl(item.Url);
+                    } else if (item.Path && p.canPlayUrl) {
+                        return p.canPlayUrl(item.Path);
                     }
                 }
 
