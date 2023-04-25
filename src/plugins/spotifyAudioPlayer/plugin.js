@@ -5,6 +5,7 @@ import profileBuilder from '../../scripts/browserDeviceProfile';
 import { getIncludeCorsCredentials } from '../../scripts/settings/webSettings';
 import { PluginType } from '../../types/plugin.ts';
 import Events from '../../utils/events.ts';
+import ServerConnections from '../../components/ServerConnections';
 
 function getDefaultProfile() {
     return profileBuilder({});
@@ -25,9 +26,9 @@ function fade(instance, elem, startingVolume) {
         return Promise.resolve();
     }
 
-    return new Promise(function (resolve, reject) {
+    return new Promise(function(resolve, reject) {
         cancelFadeTimeout();
-        fadeTimeout = setTimeout(function () {
+        fadeTimeout = setTimeout(function() {
             fade(instance, elem, newVolume).then(resolve, reject);
         }, 100);
     });
@@ -67,12 +68,12 @@ function enableHlsPlayer(url, item, mediaSource, mediaType) {
     }
 
     // issue head request to get content type
-    return new Promise(function (resolve, reject) {
+    return new Promise(function(resolve, reject) {
         import('../../components/fetchhelper').then((fetchHelper) => {
             fetchHelper.ajax({
                 url: url,
                 type: 'HEAD'
-            }).then(function (response) {
+            }).then(function(response) {
                 const contentType = (response.headers.get('Content-Type') || '').toLowerCase();
                 if (contentType === 'application/vnd.apple.mpegurl' || contentType === 'application/x-mpegurl') {
                     resolve();
@@ -96,15 +97,76 @@ class SpotifyAudioPlayer {
         // Let any players created by plugins take priority
         self.priority = 1;
 
-        self.play = function (options) {
+        self.play = async function(options) {
             self._started = false;
             self._timeUpdated = false;
             self._currentTime = null;
 
-            console.debug('spotify play : ' + options);
-            const elem = createMediaElement();
-            return setCurrentSrc(elem, options);
+            console.debug('spotify play : ' + JSON.stringify(options));
+            await initializeSpotify();
+            console.debug('spotify play, spotify ready');
+            // self.player.togglePlay().then((res) => console.log("Toggle play ", res));
         };
+
+        function spotifyAuth(cb) {
+            const apiClient = ServerConnections.currentApiClient();
+            apiClient.getUser('Me').then((user) => {
+                const token = user.SpotifyToken;
+                console.log(`Spotify auth with token ${token}`);
+                cb(token);
+            });
+        }
+
+        async function initializeSpotify() {
+            return new Promise((resolve, reject) => {
+                if (document.querySelector('.spotify-load') !== null) {
+                    // spotify alread intialized
+                    resolve();
+                }
+
+                setTimeout(reject, 5000); // If spotify doesn't load in the next 5s, there must be an error
+                window.onSpotifyWebPlaybackSDKReady = () => {
+                    self.player = new Spotify.Player({
+                        name: 'Jellyfin',
+                        getOAuthToken: spotifyAuth,
+                        volume: 0.5
+                    });
+
+                    self.player.addListener('ready', ({ device_id }) => {
+                        // Called (once?) when the spotify player is connected
+                        console.log('Spotify client ready with Device ID ', device_id);
+                        resolve();
+                    });
+
+                    self.player.addListener('not_ready', ({ device_id }) => {
+                        // This event can fire after a successful initialization, so we don't reject the promise here
+                        console.log(`Spotify client ${device_id} has gone offline`);
+                    });
+
+                    self.player.addListener('initialization_error', ({ message }) => {
+                        console.error(`Spotify client init error ${message}`);
+                        reject();
+                    });
+
+                    self.player.addListener('authentication_error', ({ message }) => {
+                        console.error(`Spotify client auth error ${message}`);
+                        reject();
+                    });
+
+                    self.player.addListener('account_error', ({ message }) => {
+                        console.error(`Spotify client account error ${message}`);
+                        reject();
+                    });
+
+                    self.player.connect();
+                }
+
+                const spotifyEl = document.createElement('script');
+                spotifyEl.setAttribute('src', 'https://sdk.scdn.co/spotify-player.js');
+                spotifyEl.setAttribute('id', 'spotify-load');
+                document.head.insertAdjacentElement('beforeend', spotifyEl);
+            });
+        }
 
         function setCurrentSrc(elem, options) {
             unBindEvents(elem);
@@ -128,14 +190,14 @@ class SpotifyAudioPlayer {
                 elem.crossOrigin = crossOrigin;
             }
 
-            return enableHlsPlayer(val, options.item, options.mediaSource, 'Audio').then(function () {
-                return new Promise(function (resolve, reject) {
+            return enableHlsPlayer(val, options.item, options.mediaSource, 'Audio').then(function() {
+                return new Promise(function(resolve, reject) {
                     requireHlsPlayer(async () => {
                         const includeCorsCredentials = await getIncludeCorsCredentials();
 
                         const hls = new Hls({
                             manifestLoadingTimeOut: 20000,
-                            xhrSetup: function (xhr) {
+                            xhrSetup: function(xhr) {
                                 xhr.withCredentials = includeCorsCredentials;
                             }
                         });
@@ -158,7 +220,7 @@ class SpotifyAudioPlayer {
                     elem.crossOrigin = 'use-credentials';
                 }
 
-                return htmlMediaHelper.applySrc(elem, val, options).then(function () {
+                return htmlMediaHelper.applySrc(elem, val, options).then(function() {
                     self._currentSrc = val;
 
                     return htmlMediaHelper.playWithPromise(elem, onError);
@@ -187,7 +249,7 @@ class SpotifyAudioPlayer {
             elem.removeEventListener('error', onError); // bound in htmlMediaHelper
         }
 
-        self.stop = function (destroyPlayer) {
+        self.stop = function(destroyPlayer) {
             cancelFadeTimeout();
             console.debug('spotify stop : ' + destroyPlayer);
 
@@ -208,7 +270,7 @@ class SpotifyAudioPlayer {
 
                 const originalVolume = elem.volume;
 
-                return fade(self, elem, elem.volume).then(function () {
+                return fade(self, elem, elem.volume).then(function() {
                     elem.pause();
                     elem.volume = originalVolume;
 
@@ -222,7 +284,7 @@ class SpotifyAudioPlayer {
             return Promise.resolve();
         };
 
-        self.destroy = function () {
+        self.destroy = function() {
             console.debug('spotify stop : ' + destroyPlayer);
             unBindEvents(self._mediaElement);
             htmlMediaHelper.resetSrc(self._mediaElement);
