@@ -96,6 +96,8 @@ class SpotifyAudioPlayer {
 
         // Let any players created by plugins take priority
         self.priority = 1;
+        initializeSpotify();
+        console.debug('spotify play, spotify ready');
 
         self.play = async function(options) {
             self._started = false;
@@ -103,69 +105,67 @@ class SpotifyAudioPlayer {
             self._currentTime = null;
 
             console.debug('spotify play : ' + JSON.stringify(options));
-            await initializeSpotify();
-            console.debug('spotify play, spotify ready');
             // self.player.togglePlay().then((res) => console.log("Toggle play ", res));
         };
 
         function spotifyAuth(cb) {
             const apiClient = ServerConnections.currentApiClient();
-            apiClient.getUser('Me').then((user) => {
-                const token = user.SpotifyToken;
-                console.log(`Spotify auth with token ${token}`);
-                cb(token);
+            const url = apiClient.getUrl('Spotify/AccessToken');
+            apiClient.getJSON(url).then((resp) => {
+                console.log(`Spotify auth, getToken response : ${resp}`);
+                if (resp.AccessToken != null) {
+                    cb(resp.AccessToken);
+                } else if (resp.RedirectURL != null) {
+                    window.location.assign(resp.RedirectURL);
+                }
+            })
+            .catch((error) => {
+                console.log(`Spotify auth, getToken error : ${error}`);
             });
         }
 
-        async function initializeSpotify() {
-            return new Promise((resolve, reject) => {
-                if (document.querySelector('.spotify-load') !== null) {
-                    // spotify alread intialized
-                    resolve();
-                }
+        function initializeSpotify() {
+            if (document.querySelector('.spotify-load') !== null) {
+                // spotify alread intialized
+                return;
+            }
 
-                setTimeout(reject, 5000); // If spotify doesn't load in the next 5s, there must be an error
-                window.onSpotifyWebPlaybackSDKReady = () => {
-                    self.player = new Spotify.Player({
-                        name: 'Jellyfin',
-                        getOAuthToken: spotifyAuth,
-                        volume: 0.5
-                    });
+            window.onSpotifyWebPlaybackSDKReady = () => {
+                self.player = new Spotify.Player({
+                    name: 'Jellyfin',
+                    getOAuthToken: spotifyAuth,
+                    volume: 0.5
+                });
 
-                    self.player.addListener('ready', ({ device_id }) => {
-                        // Called (once?) when the spotify player is connected
-                        console.log('Spotify client ready with Device ID ', device_id);
-                        resolve();
-                    });
+                self.player.addListener('ready', ({ device_id }) => {
+                    // Called (once?) when the spotify player is connected
+                    console.log('Spotify client ready with Device ID ', device_id);
+                });
 
-                    self.player.addListener('not_ready', ({ device_id }) => {
-                        // This event can fire after a successful initialization, so we don't reject the promise here
-                        console.log(`Spotify client ${device_id} has gone offline`);
-                    });
+                self.player.addListener('not_ready', ({ device_id }) => {
+                    // This event can fire after a successful initialization, so we don't reject the promise here
+                    console.log(`Spotify client ${device_id} has gone offline`);
+                });
 
-                    self.player.addListener('initialization_error', ({ message }) => {
-                        console.error(`Spotify client init error ${message}`);
-                        reject();
-                    });
+                self.player.addListener('initialization_error', ({ message }) => {
+                    console.error(`Spotify client init error ${message}`);
+                });
 
-                    self.player.addListener('authentication_error', ({ message }) => {
-                        console.error(`Spotify client auth error ${message}`);
-                        reject();
-                    });
+                self.player.addListener('authentication_error', ({ message }) => {
+                    console.error(`Spotify client auth error ${message}`);
+                });
 
-                    self.player.addListener('account_error', ({ message }) => {
-                        console.error(`Spotify client account error ${message}`);
-                        reject();
-                    });
+                self.player.addListener('account_error', ({ message }) => {
+                    console.error(`Spotify client account error ${message}`);
+                });
 
-                    self.player.connect();
-                }
+                self.player.connect();
+            }
 
-                const spotifyEl = document.createElement('script');
-                spotifyEl.setAttribute('src', 'https://sdk.scdn.co/spotify-player.js');
-                spotifyEl.setAttribute('id', 'spotify-load');
-                document.head.insertAdjacentElement('beforeend', spotifyEl);
-            });
+            const spotifyEl = document.createElement('script');
+            spotifyEl.setAttribute('src', 'https://sdk.scdn.co/spotify-player.js');
+            spotifyEl.setAttribute('id', 'spotify-load');
+            document.head.insertAdjacentElement('beforeend', spotifyEl);
         }
 
         function setCurrentSrc(elem, options) {
