@@ -93,6 +93,9 @@ class SpotifyAudioPlayer {
         self.type = PluginType.MediaPlayer;
         self.id = 'spotifyaudioplayer';
         self.isLocalPlayer = true; // We play in this browser not a different one
+        self.token = null;
+        self.authTries = 0;
+        self.playerInstance = null;
 
         // Let any players created by plugins take priority
         self.priority = 1;
@@ -104,24 +107,60 @@ class SpotifyAudioPlayer {
             self._timeUpdated = false;
             self._currentTime = null;
 
-            console.debug('spotify play : ' + JSON.stringify(options));
             // self.player.togglePlay().then((res) => console.log("Toggle play ", res));
+            if (self.token === null) {
+                // This should only happen while we are requesting a new token in spotifyAuth.
+                console.log(`spotify play, cannot play ${options.item.Name} because access token is null`);
+                return;
+            }
+
+            console.debug('spotify play : ' + JSON.stringify(options));
+            try {
+                let req = new Request(`https://api.spotify.com/v1/me/player/play?device_id=${self.playerInstance.device_id}`, {
+                    method: "PUT",
+                    body: JSON.stringify({
+                        uris: [`spotify:track:${options.item.Path.split("/").reverse()[0]}`],
+                    }),
+                    headers: { Authorization: `Bearer ${self.token}` }
+                });
+
+                let resp = await fetch(req);
+                console.log(`spotify play response : ${JSON.stringify(resp)}`);
+            } catch (e) {
+                console.log(`spotify play error : ${e}`);
+                return e;
+            }
         };
 
-        function spotifyAuth(cb) {
+        async function spotifyAuth(cb) {
             const apiClient = ServerConnections.currentApiClient();
-            const url = apiClient.getUrl('Spotify/AccessToken');
-            apiClient.getJSON(url).then((resp) => {
-                console.log(`Spotify auth, getToken response : ${resp}`);
+            let tokenUrl = null;
+            if (self.authTries == 0 && self.token !== null) {
+                // We have a cached token and we haven't tried to use it yet
+                self.authTries += 1;
+                return cb(resp.AccessToken);
+            } else if (self.authTries > 0 && self.token !== null) {
+                // We've tried to auth with this token before and it doesn't work. Invalidate it then try to refresh.
+                self.token = null;
+                tokenUrl = apiClient.getUrl('Spotify/RefreshToken');
+            } else if (self.token == null) {
+                // We don't have any cached token, get one
+                tokenUrl = apiClient.getUrl('Spotify/AccessToken');
+            }
+
+            try {
+                let resp = await apiClient.getJSON(tokenUrl);
+                console.log(`Spotify auth, get/refresh token response : ${JSON.stringify(resp)}`);
                 if (resp.AccessToken != null) {
+                    self.token = resp.AccessToken;
+                    self.authTries += 1;
                     cb(resp.AccessToken);
                 } else if (resp.RedirectURL != null) {
                     window.location.assign(resp.RedirectURL);
                 }
-            })
-            .catch((error) => {
-                console.log(`Spotify auth, getToken error : ${error}`);
-            });
+            } catch (error) {
+                console.log(`Spotify auth with refreshed token, RefreshToken error : ${JSON.stringify(error)}`);
+            }
         }
 
         function initializeSpotify() {
@@ -137,9 +176,16 @@ class SpotifyAudioPlayer {
                     volume: 0.5
                 });
 
-                self.player.addListener('ready', ({ device_id }) => {
+                self.player.addListener('ready', (instance) => {
                     // Called (once?) when the spotify player is connected
-                    console.log('Spotify client ready with Device ID ', device_id);
+                    console.log('Spotify client ready with Device ID ', instance.device_id);
+                    self.authTries = 0; // We have successfully logged-in, reset auth try counter.
+                    self.playerInstance = instance;
+                });
+
+                self.player.addListener('player_state_changed', (state) => {
+                    // Called (once?) when the spotify player is connected
+                    console.log('Spotify client state changed : ', JSON.stringify(state));
                 });
 
                 self.player.addListener('not_ready', ({ device_id }) => {
@@ -152,6 +198,7 @@ class SpotifyAudioPlayer {
                 });
 
                 self.player.addListener('authentication_error', ({ message }) => {
+                    self.token = null; // This token must be invalid
                     console.error(`Spotify client auth error ${message}`);
                 });
 
@@ -159,7 +206,11 @@ class SpotifyAudioPlayer {
                     console.error(`Spotify client account error ${message}`);
                 });
 
-                self.player.connect();
+                self.player.connect().then((status) => {
+                    if (status) {
+                        console.log("Spotify player connect successful");
+                    }
+                });
             }
 
             const spotifyEl = document.createElement('script');
