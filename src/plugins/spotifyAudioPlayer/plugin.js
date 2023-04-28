@@ -1,8 +1,6 @@
 import browser from '../../scripts/browser';
 import { appHost } from '../../components/apphost';
-import * as htmlMediaHelper from '../../components/htmlMediaHelper';
 import profileBuilder from '../../scripts/browserDeviceProfile';
-import { getIncludeCorsCredentials } from '../../scripts/settings/webSettings';
 import { PluginType } from '../../types/plugin.ts';
 import Events from '../../utils/events.ts';
 import ServerConnections from '../../components/ServerConnections';
@@ -48,43 +46,6 @@ function supportsFade() {
     return !browser.tv;
 }
 
-function requireHlsPlayer(callback) {
-    import('hls.js/dist/hls.js').then(({ default: hls }) => {
-        hls.DefaultConfig.lowLatencyMode = false;
-        hls.DefaultConfig.backBufferLength = Infinity;
-        hls.DefaultConfig.liveBackBufferLength = 90;
-        window.Hls = hls;
-        callback();
-    });
-}
-
-function enableHlsPlayer(url, item, mediaSource, mediaType) {
-    if (!htmlMediaHelper.enableHlsJsPlayer(mediaSource.RunTimeTicks, mediaType)) {
-        return Promise.reject();
-    }
-
-    if (url.indexOf('.m3u8') !== -1) {
-        return Promise.resolve();
-    }
-
-    // issue head request to get content type
-    return new Promise(function(resolve, reject) {
-        import('../../components/fetchhelper').then((fetchHelper) => {
-            fetchHelper.ajax({
-                url: url,
-                type: 'HEAD'
-            }).then(function(response) {
-                const contentType = (response.headers.get('Content-Type') || '').toLowerCase();
-                if (contentType === 'application/vnd.apple.mpegurl' || contentType === 'application/x-mpegurl') {
-                    resolve();
-                } else {
-                    reject();
-                }
-            }, reject);
-        });
-    });
-}
-
 class SpotifyAudioPlayer {
     constructor() {
         const self = this;
@@ -96,6 +57,13 @@ class SpotifyAudioPlayer {
         self.token = null;
         self.authTries = 0;
         self.playerInstance = null;
+        self.state = {
+            duration: 0,
+            paused: true,
+            currentTime: 0,
+            repeatMode: 0,
+            lastCheck: new Date(),
+        };
 
         // Let any players created by plugins take priority
         self.priority = 1;
@@ -105,7 +73,7 @@ class SpotifyAudioPlayer {
         self.play = async function(options) {
             self._started = false;
             self._timeUpdated = false;
-            self._currentTime = null;
+            self._currentTime = 5;
 
             // self.player.togglePlay().then((res) => console.log("Toggle play ", res));
             if (self.token === null) {
@@ -116,16 +84,29 @@ class SpotifyAudioPlayer {
 
             console.debug('spotify play : ' + JSON.stringify(options));
             try {
+                const uri = `spotify:track:${options.item.Path.split("/").reverse()[0]}`;
                 let req = new Request(`https://api.spotify.com/v1/me/player/play?device_id=${self.playerInstance.device_id}`, {
                     method: "PUT",
                     body: JSON.stringify({
-                        uris: [`spotify:track:${options.item.Path.split("/").reverse()[0]}`],
+                        // TOOD: start at options.playerStartPositionTicks
+                        uris: [uri],
                     }),
                     headers: { Authorization: `Bearer ${self.token}` }
                 });
 
                 let resp = await fetch(req);
-                console.log(`spotify play response : ${JSON.stringify(resp)}`);
+                console.log(`spotify play response : ${resp.status} | ${resp.statusText}`);
+                if (resp.status == 204) {
+                    this._currentSrc = uri;
+                } else if (resp.status == 401) {
+                    // TODO: refresh token
+                } else if (resp.status == 403) {
+                    console.error("Spotify API play OAuth error");
+                } else if (resp.status == 429) {
+                    // TODO: handle rate-limiting somehow ?
+                    console.log("Spotify API play failed because of rate-limiting");
+                }
+
             } catch (e) {
                 console.log(`spotify play error : ${e}`);
                 return e;
@@ -184,8 +165,7 @@ class SpotifyAudioPlayer {
                 });
 
                 self.player.addListener('player_state_changed', (state) => {
-                    // Called (once?) when the spotify player is connected
-                    console.log('Spotify client state changed : ', JSON.stringify(state));
+                    spotifyStateChanged(state);
                 });
 
                 self.player.addListener('not_ready', ({ device_id }) => {
@@ -219,85 +199,36 @@ class SpotifyAudioPlayer {
             document.head.insertAdjacentElement('beforeend', spotifyEl);
         }
 
-        function setCurrentSrc(elem, options) {
-            unBindEvents(elem);
-            bindEvents(elem);
-
-            let val = options.url;
-            console.debug('spotify playing url: ' + val);
-
-            // Convert to seconds
-            const seconds = (options.playerStartPositionTicks || 0) / 10000000;
-            if (seconds) {
-                val += '#t=' + seconds;
+        function spotifyStateChanged(state) {
+            // Status sent by spotify seems to differ from reality. Hum, except position maybe ?
+            if (state === null) {
+                return;
             }
 
-            htmlMediaHelper.destroyHlsPlayer(self);
+            console.log(`Spotify status change : duration ${state.duration}`);
+            console.log(`Spotify status change : loading ${state.loading}`);
+            console.log(`Spotify status change : paused ${state.paused}`);
+            console.log(`Spotify status change : position ${state.position}`);
+            console.log(`Spotify status change : repeat_mode ${state.repeat_mode}`);
+            console.log(`Spotify status change : shuffle ${state.shuffle}`);
+        }
 
-            self._currentPlayOptions = options;
-
-            const crossOrigin = htmlMediaHelper.getCrossOriginValue(options.mediaSource);
-            if (crossOrigin) {
-                elem.crossOrigin = crossOrigin;
-            }
-
-            return enableHlsPlayer(val, options.item, options.mediaSource, 'Audio').then(function() {
-                return new Promise(function(resolve, reject) {
-                    requireHlsPlayer(async () => {
-                        const includeCorsCredentials = await getIncludeCorsCredentials();
-
-                        const hls = new Hls({
-                            manifestLoadingTimeOut: 20000,
-                            xhrSetup: function(xhr) {
-                                xhr.withCredentials = includeCorsCredentials;
-                            }
-                        });
-                        hls.loadSource(val);
-                        hls.attachMedia(elem);
-
-                        htmlMediaHelper.bindEventsToHlsPlayer(self, hls, elem, onError, resolve, reject);
-
-                        self._hlsPlayer = hls;
-
-                        self._currentSrc = val;
-                    });
-                });
-            }, async () => {
-                elem.autoplay = true;
-
-                const includeCorsCredentials = await getIncludeCorsCredentials();
-                if (includeCorsCredentials) {
-                    // Safari will not send cookies without this
-                    elem.crossOrigin = 'use-credentials';
+        async function getSpotifyStatus() {
+            const now = new Date();
+            const timeDiff = (this.state.lastCheck - now);
+            if (timeDiff > 10*1000) {
+                // We havn't checked the status for more than 10s, do a refresh
+                const state = await self.player.getCurrentState();
+                if (!state) {
+                    // Not playing
+                    this._currentSrc = null;
                 }
 
-                return htmlMediaHelper.applySrc(elem, val, options).then(function() {
-                    self._currentSrc = val;
-
-                    return htmlMediaHelper.playWithPromise(elem, onError);
-                });
-            });
-        }
-
-        function bindEvents(elem) {
-            elem.addEventListener('timeupdate', onTimeUpdate);
-            elem.addEventListener('ended', onEnded);
-            elem.addEventListener('volumechange', onVolumeChange);
-            elem.addEventListener('pause', onPause);
-            elem.addEventListener('playing', onPlaying);
-            elem.addEventListener('play', onPlay);
-            elem.addEventListener('waiting', onWaiting);
-        }
-
-        function unBindEvents(elem) {
-            elem.removeEventListener('timeupdate', onTimeUpdate);
-            elem.removeEventListener('ended', onEnded);
-            elem.removeEventListener('volumechange', onVolumeChange);
-            elem.removeEventListener('pause', onPause);
-            elem.removeEventListener('playing', onPlaying);
-            elem.removeEventListener('play', onPlay);
-            elem.removeEventListener('waiting', onWaiting);
-            elem.removeEventListener('error', onError); // bound in htmlMediaHelper
+                this.state.lastCheck = now;
+                spotifyStateChanged(state);
+            } else {
+                this.state.position += timeDiff; // Let's assume nobody paused in the last ten secs
+            }
         }
 
         self.stop = function(destroyPlayer) {
@@ -340,30 +271,6 @@ class SpotifyAudioPlayer {
             unBindEvents(self._mediaElement);
             htmlMediaHelper.resetSrc(self._mediaElement);
         };
-
-        function createMediaElement() {
-            let elem = self._mediaElement;
-
-            if (elem) {
-                return elem;
-            }
-
-            elem = document.querySelector('.mediaPlayerAudio');
-
-            if (!elem) {
-                elem = document.createElement('audio');
-                elem.classList.add('mediaPlayerAudio');
-                elem.classList.add('hide');
-
-                document.body.appendChild(elem);
-            }
-
-            elem.volume = htmlMediaHelper.getSavedVolume();
-
-            self._mediaElement = elem;
-
-            return elem;
-        }
 
         function onEnded() {
             htmlMediaHelper.onEndedInternal(self, this, onError);
@@ -413,42 +320,11 @@ class SpotifyAudioPlayer {
             const errorCode = this.error ? (this.error.code || 0) : 0;
             const errorMessage = this.error ? (this.error.message || '') : '';
             console.error('spotify media element error: ' + errorCode.toString() + ' ' + errorMessage);
-
-            let type;
-
-            switch (errorCode) {
-                case 1:
-                    // MEDIA_ERR_ABORTED
-                    // This will trigger when changing media while something is playing
-                    return;
-                case 2:
-                    // MEDIA_ERR_NETWORK
-                    type = 'network';
-                    break;
-                case 3:
-                    // MEDIA_ERR_DECODE
-                    if (self._hlsPlayer) {
-                        htmlMediaHelper.handleHlsJsMediaError(self);
-                        return;
-                    } else {
-                        type = 'mediadecodeerror';
-                    }
-                    break;
-                case 4:
-                    // MEDIA_ERR_SRC_NOT_SUPPORTED
-                    type = 'medianotsupported';
-                    break;
-                default:
-                    // seeing cases where Edge is firing error events with no error code
-                    // example is start playing something, then immediately change src to something else
-                    return;
-            }
-
-            htmlMediaHelper.onErrorInternal(self, type);
         }
     }
 
     currentSrc() {
+        console.log(`Spotify plugin currentSrc : ${this._currentSrc}`);
         return this._currentSrc;
     }
 
@@ -458,7 +334,6 @@ class SpotifyAudioPlayer {
 
     canPlayItem() {
         // Does not play server items
-        console.debug("Spotify player, can play items ? I think not");
         return false;
     }
 
@@ -468,6 +343,7 @@ class SpotifyAudioPlayer {
     }
 
     getDeviceProfile(item) {
+        // console.log(`Spotify plugin getDeviceProfile : ${item}`);
         if (appHost.getDeviceProfile) {
             return appHost.getDeviceProfile(item);
         }
@@ -477,23 +353,13 @@ class SpotifyAudioPlayer {
 
     // Save this for when playback stops, because querying the time at that point might return 0
     currentTime(val) {
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            if (val != null) {
-                mediaElement.currentTime = val / 1000;
-                return;
-            }
-
-            const currentTime = this._currentTime;
-            if (currentTime) {
-                return currentTime * 1000;
-            }
-
-            return (mediaElement.currentTime || 0) * 1000;
-        }
+        console.log(`Spotify plugin currentTime : ${val}`);
+        getSpotifyStatus(); // TODO: wait for promise to resolve
+        return this.state.position;
     }
 
     duration() {
+        console.log("Spotify plugin duration");
         const mediaElement = this._mediaElement;
         if (mediaElement) {
             const duration = mediaElement.duration;
@@ -506,6 +372,7 @@ class SpotifyAudioPlayer {
     }
 
     seekable() {
+        console.log("Spotify plugin seekable");
         const mediaElement = this._mediaElement;
         if (mediaElement) {
             const seekable = mediaElement.seekable;
@@ -528,6 +395,7 @@ class SpotifyAudioPlayer {
     }
 
     getBufferedRanges() {
+        console.log("Spotify plugin getBufferedRanges");
         const mediaElement = this._mediaElement;
         if (mediaElement) {
             return htmlMediaHelper.getBufferedRanges(this, mediaElement);
@@ -537,6 +405,7 @@ class SpotifyAudioPlayer {
     }
 
     pause() {
+        console.log("Spotify plugin pause");
         const mediaElement = this._mediaElement;
         if (mediaElement) {
             mediaElement.pause();
@@ -549,6 +418,7 @@ class SpotifyAudioPlayer {
     }
 
     unpause() {
+        console.log("Spotify plugin unpause");
         const mediaElement = this._mediaElement;
         if (mediaElement) {
             mediaElement.play();
@@ -556,27 +426,13 @@ class SpotifyAudioPlayer {
     }
 
     paused() {
+        console.log("Spotify plugin is paused ?");
         const mediaElement = this._mediaElement;
         if (mediaElement) {
             return mediaElement.paused;
         }
 
         return false;
-    }
-
-    setPlaybackRate(value) {
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            mediaElement.playbackRate = value;
-        }
-    }
-
-    getPlaybackRate() {
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            return mediaElement.playbackRate;
-        }
-        return null;
     }
 
     setVolume(val) {
@@ -617,25 +473,9 @@ class SpotifyAudioPlayer {
     }
 
     supports(feature) {
-        if (!supportedFeatures) {
-            supportedFeatures = getSupportedFeatures();
-        }
-
-        return supportedFeatures.indexOf(feature) !== -1;
+        console.log(`Spotify plugin supports ${feature} ? No.`);
+        return false; // We don't support any feature
     }
-}
-
-let supportedFeatures;
-
-function getSupportedFeatures() {
-    const list = [];
-    const audio = document.createElement('audio');
-
-    if (typeof audio.playbackRate === 'number') {
-        list.push('PlaybackRate');
-    }
-
-    return list;
 }
 
 export default SpotifyAudioPlayer;
