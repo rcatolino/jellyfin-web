@@ -323,8 +323,18 @@ class SpotifyAudioPlayer {
         return getDefaultProfile();
     }
 
-    currentTime() {
-        // console.log(`Spotify plugin currentTime : ${this._currentTime}`);
+    currentTime(newTime) {
+        const self = this;
+        if (newTime) {
+            console.log(`Spotify plugin set currentTime : ${newTime}`);
+            this.player.seek(newTime).then(() => {
+                self._currentTime = newTime;
+                self.state.position = newTime;
+                self.state.lastCheck = new Date();
+                Events.trigger(self, 'timeupdate');
+            })
+        }
+
         return this._currentTime;
     }
 
