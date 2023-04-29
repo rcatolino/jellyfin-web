@@ -316,7 +316,7 @@ class SpotifyAudioPlayer {
 
             this.spotifyStateChanged(state);
             if (!this.state.muted) {
-                this.state.volume = (await this.player.getVolume())*100;
+                this.state.volume = Math.floor((await this.player.getVolume())*100);
             }
         }
     }
@@ -370,18 +370,23 @@ class SpotifyAudioPlayer {
         return [];
     }
 
-    pause() {
+    async pause() {
         console.log("Spotify plugin pause");
+        await this.player.pause();
+        this.state.paused = true;
+        Events.trigger(this, 'pause');
     }
 
     // This is a retry after error
     resume() {
-        console.log("Spotify plugin resume");
         this.unpause();
     }
 
-    unpause() {
+    async unpause() {
         console.log("Spotify plugin unpause");
+        await this.player.resume();
+        this.state.paused = false;
+        Events.trigger(this, 'unpause');
     }
 
     paused() {
