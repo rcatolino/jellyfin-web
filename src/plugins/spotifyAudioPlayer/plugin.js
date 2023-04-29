@@ -210,52 +210,29 @@ class SpotifyAudioPlayer {
             document.head.insertAdjacentElement('beforeend', spotifyEl);
         }
 
-        self.stop = function(destroyPlayer) {
-            cancelFadeTimeout();
-            console.debug('spotify stop : ' + destroyPlayer);
+    }
 
-            const elem = self._mediaElement;
-            const src = self._currentSrc;
+    destroy() {
+        console.debug('spotify destroy');
+        // Nothing to destroy
+    }
 
-            if (elem && src) {
-                if (!destroyPlayer || !supportsFade()) {
-                    elem.pause();
+    async stop(destroyPlayer) {
+        // cancelFadeTimeout();
+        console.debug('spotify stop, destroyPlayer : ' + destroyPlayer);
+        if (self.updateInterval !== null) {
+            clearInterval(self.updateInterval);
+        }
 
-                    htmlMediaHelper.onEndedInternal(self, elem, onError);
-
-                    if (destroyPlayer) {
-                        self.destroy();
-                    }
-                    return Promise.resolve();
-                }
-
-                const originalVolume = elem.volume;
-
-                return fade(self, elem, elem.volume).then(function() {
-                    elem.pause();
-                    elem.volume = originalVolume;
-
-                    htmlMediaHelper.onEndedInternal(self, elem, onError);
-
-                    if (destroyPlayer) {
-                        self.destroy();
-                    }
-                });
-            }
-            return Promise.resolve();
-        };
-
-        self.destroy = function() {
-            console.debug('spotify stop : ' + destroyPlayer);
-            unBindEvents(self._mediaElement);
-            htmlMediaHelper.resetSrc(self._mediaElement);
-        };
-
-        function onVolumeChange() {
-            if (!self._isFadingOut) {
-                htmlMediaHelper.saveVolume(this.volume);
-                Events.trigger(self, 'volumechange');
-            }
+        this.pause();
+        this.state.position = 0;
+        this._currentTime = 0;
+        this._currentSrc = null;
+        this.state.duration = 0;
+        Events.trigger(this, 'timeupdate');
+        Events.trigger(this, 'stopped');
+        if (destroyPlayer) {
+            this.destroy();
         }
     }
 
@@ -425,7 +402,6 @@ class SpotifyAudioPlayer {
     }
 
     isMuted() {
-        console.log("Spotify isMuted");
         return this.state.muted;
     }
 
