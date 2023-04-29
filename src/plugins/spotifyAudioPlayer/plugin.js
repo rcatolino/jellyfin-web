@@ -57,11 +57,12 @@ class SpotifyAudioPlayer {
         self.token = null;
         self.authTries = 0;
         self.playerInstance = null;
+        self.updateInterval = null;
         self.state = {
             duration: 0,
             paused: true,
-            currentTime: 0,
             repeatMode: 0,
+            position: 0,
             lastCheck: new Date(),
         };
 
@@ -73,9 +74,15 @@ class SpotifyAudioPlayer {
         self.play = async function(options) {
             self._started = false;
             self._timeUpdated = false;
-            self._currentTime = 5;
+            self._currentTime = 0;
+            self.state.lastCheck = new Date();
+            self.state.duration = 0;
+            self.state.position = 0;
+            if (self.updateInterval !== null) {
+                clearInterval(self.updateInterval);
+            }
+            self.updateInterval = setInterval(() => self.onTimeUpdate(), 2000);
 
-            // self.player.togglePlay().then((res) => console.log("Toggle play ", res));
             if (self.token === null) {
                 // This should only happen while we are requesting a new token in spotifyAuth.
                 console.log(`spotify play, cannot play ${options.item.Name} because access token is null`);
@@ -94,10 +101,13 @@ class SpotifyAudioPlayer {
                     headers: { Authorization: `Bearer ${self.token}` }
                 });
 
+                Events.trigger(self, 'waiting');
                 let resp = await fetch(req);
                 console.log(`spotify play response : ${resp.status} | ${resp.statusText}`);
-                if (resp.status == 204) {
-                    this._currentSrc = uri;
+                if (resp.status >= 200 && resp.status < 300) {
+                    self._currentSrc = uri;
+                    await self.player.resume(); // Try to workaround spotify web playback bug on first play
+                    Events.trigger(self, 'playing');
                 } else if (resp.status == 401) {
                     // TODO: refresh token
                 } else if (resp.status == 403) {
@@ -119,7 +129,7 @@ class SpotifyAudioPlayer {
             if (self.authTries == 0 && self.token !== null) {
                 // We have a cached token and we haven't tried to use it yet
                 self.authTries += 1;
-                return cb(resp.AccessToken);
+                return cb(self.token);
             } else if (self.authTries > 0 && self.token !== null) {
                 // We've tried to auth with this token before and it doesn't work. Invalidate it then try to refresh.
                 self.token = null;
@@ -165,7 +175,7 @@ class SpotifyAudioPlayer {
                 });
 
                 self.player.addListener('player_state_changed', (state) => {
-                    spotifyStateChanged(state);
+                    self.spotifyStateChanged(state);
                 });
 
                 self.player.addListener('not_ready', ({ device_id }) => {
@@ -197,38 +207,6 @@ class SpotifyAudioPlayer {
             spotifyEl.setAttribute('src', 'https://sdk.scdn.co/spotify-player.js');
             spotifyEl.setAttribute('id', 'spotify-load');
             document.head.insertAdjacentElement('beforeend', spotifyEl);
-        }
-
-        function spotifyStateChanged(state) {
-            // Status sent by spotify seems to differ from reality. Hum, except position maybe ?
-            if (state === null) {
-                return;
-            }
-
-            console.log(`Spotify status change : duration ${state.duration}`);
-            console.log(`Spotify status change : loading ${state.loading}`);
-            console.log(`Spotify status change : paused ${state.paused}`);
-            console.log(`Spotify status change : position ${state.position}`);
-            console.log(`Spotify status change : repeat_mode ${state.repeat_mode}`);
-            console.log(`Spotify status change : shuffle ${state.shuffle}`);
-        }
-
-        async function getSpotifyStatus() {
-            const now = new Date();
-            const timeDiff = (this.state.lastCheck - now);
-            if (timeDiff > 10*1000) {
-                // We havn't checked the status for more than 10s, do a refresh
-                const state = await self.player.getCurrentState();
-                if (!state) {
-                    // Not playing
-                    this._currentSrc = null;
-                }
-
-                this.state.lastCheck = now;
-                spotifyStateChanged(state);
-            } else {
-                this.state.position += timeDiff; // Let's assume nobody paused in the last ten secs
-            }
         }
 
         self.stop = function(destroyPlayer) {
@@ -272,54 +250,70 @@ class SpotifyAudioPlayer {
             htmlMediaHelper.resetSrc(self._mediaElement);
         };
 
-        function onEnded() {
-            htmlMediaHelper.onEndedInternal(self, this, onError);
-        }
-
-        function onTimeUpdate() {
-            // Get the player position + the transcoding offset
-            const time = this.currentTime;
-
-            // Don't trigger events after user stop
-            if (!self._isFadingOut) {
-                self._currentTime = time;
-                Events.trigger(self, 'timeupdate');
-            }
-        }
-
         function onVolumeChange() {
             if (!self._isFadingOut) {
                 htmlMediaHelper.saveVolume(this.volume);
                 Events.trigger(self, 'volumechange');
             }
         }
+    }
 
-        function onPlaying(e) {
-            if (!self._started) {
-                self._started = true;
-                this.removeAttribute('controls');
+    onTimeUpdate() {
+        this.updateSpotifyStatus(); // This may start an async state update
+        // console.log("Spotify plugin onTimeUpdate");
 
-                htmlMediaHelper.seekOnPlaybackStart(self, e.target, self._currentPlayOptions.playerStartPositionTicks);
+        // Don't trigger events after user stop
+        if (!this._isFadingOut) {
+            Events.trigger(this, 'timeupdate');
+        }
+    }
+
+    spotifyStateChanged(state) {
+        // Status sent by spotify seems to differ from reality. Hum, except position maybe ?
+        if (state === null) {
+            return;
+        }
+
+        // console.log(`Spotify status change : duration ${state.duration}`);
+        // console.log(`Spotify status change : loading ${state.loading}`);
+        // console.log(`Spotify status change : paused ${state.paused}`);
+        // console.log(`Spotify status change : position ${state.position}`);
+        // console.log(`Spotify status change : repeat_mode ${state.repeat_mode}`);
+        // console.log(`Spotify status change : shuffle ${state.shuffle}`);
+
+        this.state.position = state.position;
+        this.state.duration = state.duration;
+        if (state.paused != this.state.paused) {
+            this.state.paused = state.paused;
+            if (state.paused) {
+                Events.trigger(this, 'pause');
+            } else {
+                Events.trigger(this, 'unpause');
             }
-            Events.trigger(self, 'playing');
         }
 
-        function onPlay() {
-            Events.trigger(self, 'unpause');
+        this.state.lastCheck = new Date();
+    }
+
+    async updateSpotifyStatus() {
+        const now = new Date();
+        const timeDiff = (now - this.state.lastCheck);
+        if (!this.state.paused) {
+            this._currentTime = this.state.position + timeDiff; // Estimate currentTime from last known position + time since check
+        } else {
+            this._currentTime = this.state.position;
         }
 
-        function onPause() {
-            Events.trigger(self, 'pause');
-        }
+        if (timeDiff > 10*1000) {
+            // We haven't checked the status for more than 10s, do a refresh
+            console.log("Spotify update stale status");
+            const state = await this.player.getCurrentState();
+            if (!state) {
+                // Not playing
+                this._currentSrc = null;
+            }
 
-        function onWaiting() {
-            Events.trigger(self, 'waiting');
-        }
-
-        function onError() {
-            const errorCode = this.error ? (this.error.code || 0) : 0;
-            const errorMessage = this.error ? (this.error.message || '') : '';
-            console.error('spotify media element error: ' + errorCode.toString() + ' ' + errorMessage);
+            this.spotifyStateChanged(state);
         }
     }
 
@@ -351,125 +345,66 @@ class SpotifyAudioPlayer {
         return getDefaultProfile();
     }
 
-    // Save this for when playback stops, because querying the time at that point might return 0
-    currentTime(val) {
-        console.log(`Spotify plugin currentTime : ${val}`);
-        getSpotifyStatus(); // TODO: wait for promise to resolve
-        return this.state.position;
+    currentTime() {
+        // console.log(`Spotify plugin currentTime : ${this._currentTime}`);
+        return this._currentTime;
     }
 
     duration() {
         console.log("Spotify plugin duration");
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            const duration = mediaElement.duration;
-            if (htmlMediaHelper.isValidDuration(duration)) {
-                return duration * 1000;
-            }
-        }
-
-        return null;
+        return this.state.duration;
     }
 
     seekable() {
         console.log("Spotify plugin seekable");
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            const seekable = mediaElement.seekable;
-            if (seekable && seekable.length) {
-                let start = seekable.start(0);
-                let end = seekable.end(0);
-
-                if (!htmlMediaHelper.isValidDuration(start)) {
-                    start = 0;
-                }
-                if (!htmlMediaHelper.isValidDuration(end)) {
-                    end = 0;
-                }
-
-                return (end - start) > 0;
-            }
-
-            return false;
-        }
+        return true;
     }
 
     getBufferedRanges() {
         console.log("Spotify plugin getBufferedRanges");
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            return htmlMediaHelper.getBufferedRanges(this, mediaElement);
-        }
-
         return [];
     }
 
     pause() {
         console.log("Spotify plugin pause");
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            mediaElement.pause();
-        }
     }
 
     // This is a retry after error
     resume() {
+        console.log("Spotify plugin resume");
         this.unpause();
     }
 
     unpause() {
         console.log("Spotify plugin unpause");
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            mediaElement.play();
-        }
     }
 
     paused() {
-        console.log("Spotify plugin is paused ?");
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            return mediaElement.paused;
-        }
-
-        return false;
+        return this.state.paused;
     }
 
     setVolume(val) {
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            mediaElement.volume = Math.pow(val / 100, 3);
-        }
+        console.log(`Spotify set volume to ${val}`);
     }
 
     getVolume() {
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            return Math.min(Math.round(Math.pow(mediaElement.volume, 1 / 3) * 100), 100);
-        }
+        console.log("Spotify get volume");
     }
 
     volumeUp() {
-        this.setVolume(Math.min(this.getVolume() + 2, 100));
+        console.log("Spotify setVolumeUp");
     }
 
     volumeDown() {
-        this.setVolume(Math.max(this.getVolume() - 2, 0));
+        console.log("Spotify setVolumeDown");
     }
 
     setMute(mute) {
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            mediaElement.muted = mute;
-        }
+        console.log(`Spotify setMute ${mute}`);
     }
 
     isMuted() {
-        const mediaElement = this._mediaElement;
-        if (mediaElement) {
-            return mediaElement.muted;
-        }
-        return false;
+        console.log("Spotify isMuted");
     }
 
     supports(feature) {
