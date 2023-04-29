@@ -63,13 +63,14 @@ class SpotifyAudioPlayer {
             paused: true,
             repeatMode: 0,
             position: 0,
+            volume: 50,
+            muted: false,
             lastCheck: new Date(),
         };
 
         // Let any players created by plugins take priority
         self.priority = 1;
         initializeSpotify();
-        console.debug('spotify play, spotify ready');
 
         self.play = async function(options) {
             self._started = false;
@@ -164,7 +165,7 @@ class SpotifyAudioPlayer {
                 self.player = new Spotify.Player({
                     name: 'Jellyfin',
                     getOAuthToken: spotifyAuth,
-                    volume: 0.5
+                    volume: 0.5 // TODO: Can we get the global volume somewhere ?
                 });
 
                 self.player.addListener('ready', (instance) => {
@@ -314,6 +315,9 @@ class SpotifyAudioPlayer {
             }
 
             this.spotifyStateChanged(state);
+            if (!this.state.muted) {
+                this.state.volume = (await this.player.getVolume())*100;
+            }
         }
     }
 
@@ -361,7 +365,8 @@ class SpotifyAudioPlayer {
     }
 
     getBufferedRanges() {
-        console.log("Spotify plugin getBufferedRanges");
+        // console.log("Spotify plugin getBufferedRanges");
+        // We can't get this info from the player
         return [];
     }
 
@@ -385,26 +390,38 @@ class SpotifyAudioPlayer {
 
     setVolume(val) {
         console.log(`Spotify set volume to ${val}`);
+        this.player.setVolume(val/100);
+        this.state.volume = val;
     }
 
     getVolume() {
-        console.log("Spotify get volume");
+        return this.state.volume;
     }
 
     volumeUp() {
         console.log("Spotify setVolumeUp");
+        this.setVolume(Math.min(this.getVolume() + 2, 100));
     }
 
     volumeDown() {
         console.log("Spotify setVolumeDown");
+        this.setVolume(Math.max(this.getVolume() - 2, 0));
     }
 
     setMute(mute) {
         console.log(`Spotify setMute ${mute}`);
+        if (mute) {
+            this.state.muted = true;
+            this.player.setVolume(0);
+        } else {
+            this.state.muted = false;
+            this.player.setVolume(this.state.volume/100);
+        }
     }
 
     isMuted() {
         console.log("Spotify isMuted");
+        return this.state.muted;
     }
 
     supports(feature) {
