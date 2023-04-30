@@ -81,8 +81,8 @@ class SpotifyAudioPlayer {
         if (this.updateInterval !== null) {
             clearInterval(this.updateInterval);
         }
-        this.updateInterval = setInterval(() => this.onTimeUpdate(), 2000);
 
+        this.updateInterval = setInterval(() => this.onTimeUpdate(), 1000);
         if (this.token === null) {
             // This should only happen while we are requesting a new token in spotifyAuth.
             console.log(`spotify play, cannot play ${options.item.Name} because access token is null`);
@@ -102,11 +102,14 @@ class SpotifyAudioPlayer {
             });
 
             Events.trigger(this, 'waiting');
+            // Workaround spotify web playback bug on new play :
+            // We sometimes get 502 bad gateways when the current player is still playing).
+            await this.player.pause();
             let resp = await fetch(req);
             console.log(`spotify play response : ${resp.status} | ${resp.statusText}`);
             if (resp.status >= 200 && resp.status < 300) {
                 this._currentSrc = uri;
-                await this.player.resume(); // Try to workaround spotify web playback bug on first play
+                await this.player.resume(); // Workaround spotify web playback bug on first play
                 Events.trigger(this, 'playing');
             } else if (resp.status == 401) {
                 // TODO: refresh token
@@ -115,8 +118,13 @@ class SpotifyAudioPlayer {
             } else if (resp.status == 429) {
                 // TODO: handle rate-limiting somehow ?
                 console.log("Spotify API play failed because of rate-limiting");
+            } else if (resp.status >= 500) {
+                // Server error, wait a bit and retry (once)
+                if (options.retry !== false) {
+                    options.retry = false;
+                    setTimeout(() => this.play(options), 1000);
+                }
             }
-
         } catch (e) {
             console.log(`spotify play error : ${e}`);
             return e;
@@ -150,7 +158,7 @@ class SpotifyAudioPlayer {
                 window.location.assign(resp.RedirectURL);
             }
         } catch (error) {
-            console.log(`Spotify auth with refreshed token, RefreshToken error : ${error}`);
+            console.log(`Spotify auth with refreshed token, RefreshToken error : ${JSON.stringify(error)}`);
         }
     }
 
@@ -214,20 +222,24 @@ class SpotifyAudioPlayer {
         // Nothing to destroy
     }
 
-    async stop(destroyPlayer) {
-        // cancelFadeTimeout();
-        console.debug('spotify stop, destroyPlayer : ' + destroyPlayer);
-        if (self.updateInterval !== null) {
-            clearInterval(self.updateInterval);
+    onEnded() {
+        if (this.updateInterval !== null) {
+            clearInterval(this.updateInterval);
         }
 
-        this.pause();
         this.state.position = 0;
         this._currentTime = 0;
         this._currentSrc = null;
         this.state.duration = 0;
-        Events.trigger(this, 'timeupdate');
         Events.trigger(this, 'stopped');
+    }
+
+    async stop(destroyPlayer) {
+        // cancelFadeTimeout();
+        console.debug('spotify stop, destroyPlayer : ' + destroyPlayer);
+        this.pause();
+        this.onEnded();
+        Events.trigger(this, 'timeupdate');
         if (destroyPlayer) {
             this.destroy();
         }
@@ -261,7 +273,13 @@ class SpotifyAudioPlayer {
         if (state.paused != this.state.paused) {
             this.state.paused = state.paused;
             if (state.paused) {
-                Events.trigger(this, 'pause');
+                console.log(`Spotify initiated pause event. Current duration ${state.duration}, position ${state.position}`);
+                if (state.position == 0) {
+                    // This track has ended
+                    this.onEnded();
+                } else {
+                    Events.trigger(this, 'pause');
+                }
             } else {
                 Events.trigger(this, 'unpause');
             }
@@ -325,7 +343,7 @@ class SpotifyAudioPlayer {
 
     currentTime(newTime) {
         const self = this;
-        if (newTime) {
+        if (newTime !== null && newTime !== undefined) {
             console.log(`Spotify plugin set currentTime : ${newTime}`);
             this.player.seek(newTime).then(() => {
                 self._currentTime = newTime;
