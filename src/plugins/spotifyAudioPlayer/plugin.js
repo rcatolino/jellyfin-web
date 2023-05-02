@@ -112,7 +112,7 @@ class SpotifyAudioPlayer {
                 await this.player.resume(); // Workaround spotify web playback bug on first play
                 Events.trigger(this, 'playing');
             } else if (resp.status == 401) {
-                // TODO: refresh token
+                // TODO: refresh token. Disconnect/Reconnect ?
             } else if (resp.status == 403) {
                 console.error("Spotify API play OAuth error");
             } else if (resp.status == 429) {
@@ -256,7 +256,7 @@ class SpotifyAudioPlayer {
     }
 
     spotifyStateChanged(state) {
-        // Status sent by spotify seems to differ from reality. Hum, except position maybe ?
+        // Status sent by spotify often seems to differ from reality. Hum, except position maybe ?
         if (state === null) {
             return;
         }
@@ -268,7 +268,11 @@ class SpotifyAudioPlayer {
         // console.log(`Spotify status change : repeat_mode ${state.repeat_mode}`);
         // console.log(`Spotify status change : shuffle ${state.shuffle}`);
 
-        this.state.position = state.position;
+        if (this.state.duration != 0) {
+            // We may be stopped
+            this.state.position = state.position;
+        }
+
         this.state.duration = state.duration;
         if (state.paused != this.state.paused) {
             this.state.paused = state.paused;
@@ -297,7 +301,7 @@ class SpotifyAudioPlayer {
             this._currentTime = this.state.position;
         }
 
-        if (timeDiff > 10*1000) {
+        if (timeDiff > 5*1000) {
             // We haven't checked the status for more than 10s, do a refresh
             console.log("Spotify update stale status");
             const state = await this.player.getCurrentState();
@@ -344,7 +348,6 @@ class SpotifyAudioPlayer {
     currentTime(newTime) {
         const self = this;
         if (newTime !== null && newTime !== undefined) {
-            console.log(`Spotify plugin set currentTime : ${newTime}`);
             this.player.seek(newTime).then(() => {
                 self._currentTime = newTime;
                 self.state.position = newTime;
