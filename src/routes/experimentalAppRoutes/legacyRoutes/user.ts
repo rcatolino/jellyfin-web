@@ -38,6 +38,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
             view: 'user/controls/index.html'
         }
     }, {
+        path: 'mypreferencesspotify.html',
+        pageProps: {
+            controller: 'user/spotify/index',
+            view: 'user/spotify/index.html'
+        }
+    }, {
         path: 'mypreferencesdisplay.html',
         pageProps: {
             controller: 'user/display/index',

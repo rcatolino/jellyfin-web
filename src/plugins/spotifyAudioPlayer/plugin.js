@@ -362,7 +362,6 @@ class SpotifyAudioPlayer {
 
         if (timeDiff > 5*1000) {
             // We haven't checked the status for more than 10s, do a refresh
-            console.log("Spotify update stale status");
             const state = await this.player.getCurrentState();
             if (!state) {
                 // Not playing

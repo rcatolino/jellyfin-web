@@ -1,0 +1,23 @@
+<div id="spotifyPreferencesPage" data-role="page" class="page libraryPage userPreferencesPage noSecondaryNavPage"
+    data-title="${Spotify}" data-menubutton="true">
+    <div class="padded-left padded-right padded-bottom-page">
+        <form style="margin: 0 auto;">
+            <div class="verticalSection verticalSection-extrabottompadding">
+                <h2 class="sectionTitle">
+                    ${Spotify}
+                </h2>
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="txtNewApiId" required label="${LabelApiId}"
+                        autocomplete="off" />
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" type="password" id="txtNewApiKey" required label="${LabelApiKey}"
+                        autocomplete="off" />
+                </div>
+                <button is="emby-button" type="submit" class="raised button-submit block btnSave hide">
+                    <span>${Save}</span>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
