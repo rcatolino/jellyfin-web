@@ -115,9 +115,10 @@ class SpotifyAudioPlayer {
                 Events.trigger(this, 'playing');
             } else if (resp.status == 401) {
                 console.log("Spotify API authorization error");
-                this.ensureConnected(); // Auto-retry play if this succeeds ?
+                this.ensureConnected(true); // Auto-retry play if this succeeds ?
             } else if (resp.status == 403) {
                 console.error("Spotify API play OAuth error");
+                clearInterval(this.updateInterval);
             } else if (resp.status == 429) {
                 // TODO: handle rate-limiting somehow ?
                 console.log("Spotify API play failed because of rate-limiting");
@@ -131,6 +132,7 @@ class SpotifyAudioPlayer {
             }
         } catch (e) {
             console.log(`spotify play error : ${e}`);
+            clearInterval(this.updateInterval);
             return e;
         }
     }
