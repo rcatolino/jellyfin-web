@@ -86,7 +86,7 @@ class SpotifyAudioPlayer {
             return;
         }
 
-        console.debug('spotify play : ' + JSON.stringify(options));
+        console.debug('spotify play : ' + options.item.Path);
         if (this.updateInterval !== null) {
             clearInterval(this.updateInterval);
         }
@@ -115,9 +115,15 @@ class SpotifyAudioPlayer {
                 Events.trigger(this, 'playing');
             } else if (resp.status == 401) {
                 console.log("Spotify API authorization error");
-                this.ensureConnected(true); // Auto-retry play if this succeeds ?
+                this.ensureConnected(true); // TODO: Auto-retry play if this succeeds ?
             } else if (resp.status == 403) {
                 console.error("Spotify API play OAuth error");
+                clearInterval(this.updateInterval);
+            } else if (resp.status == 404) {
+                // This happens when the device id is not valid anymore
+                console.error("Spotify API device not found");
+                this.playerInstance = null;
+                this.ensureConnected(true);
                 clearInterval(this.updateInterval);
             } else if (resp.status == 429) {
                 // TODO: handle rate-limiting somehow ?
@@ -270,8 +276,9 @@ class SpotifyAudioPlayer {
                 console.log("Spotify player connection failed");
             }
         } catch (error) {
-            console.log("Spotify player reconnect error");
+            console.log(`Spotify player reconnect error : ${error}`);
             status = false;
+            this.playerInstance = null;
         }
 
         this.connecting = false;
@@ -496,7 +503,6 @@ class SpotifyAudioPlayer {
     }
 
     supports(feature) {
-        console.log(`Spotify plugin supports ${feature} ? No.`);
         return false; // We don't support any feature
     }
 }
