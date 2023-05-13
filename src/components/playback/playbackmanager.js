@@ -47,6 +47,7 @@ function triggerPlayerChange(playbackManagerInstance, newPlayer, newTarget, prev
         return;
     }
 
+    console.log(`Playback manager player trigger player change event, current player : ${playbackManagerInstance._currentPlayer}`);
     Events.trigger(playbackManagerInstance, 'playerchange', [newPlayer, newTarget, previousPlayer]);
 }
 
@@ -59,7 +60,7 @@ function reportPlayback(playbackManagerInstance, state, player, reportPlaylist, 
     }
 
     const info = Object.assign({}, state.PlayState);
-    info.ItemId = state.NowPlayingItem.Id;
+    // info.ItemId = state.NowPlayingItem.Id;
 
     if (progressEventName) {
         info.EventName = progressEventName;
@@ -3269,6 +3270,7 @@ class PlaybackManager {
                 data.streamInfo = null;
                 destroyPlayer(player);
                 removeCurrentPlayer(player);
+                setCurrentPlayerInternal(newPlayer);
             }
 
             if (errorOccurred) {
@@ -3281,7 +3283,7 @@ class PlaybackManager {
         function onPlaybackChanging(activePlayer, newPlayer, newItem) {
             const state = self.getPlayerState(activePlayer);
 
-            const serverId = self.currentItem(activePlayer).ServerId;
+            const serverId = newItem.ServerId;
 
             // User started playing something new while existing content is playing
             let promise;
@@ -3645,6 +3647,7 @@ class PlaybackManager {
     }
 
     seekPercent(percent, player = this._currentPlayer) {
+        console.log(`Playbackmanager seekPercent, player : ${player.name}, _currentPlayer : ${this._currentPlayer.name}`);
         let ticks = this.duration(player) || 0;
 
         percent /= 100;

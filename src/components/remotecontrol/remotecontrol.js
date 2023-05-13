@@ -643,6 +643,12 @@ export default function () {
     }
 
     function bindToPlayer(context, player) {
+        if (player) {
+            console.log(`Remotecontrol playerchange/show event ! New player : ${player.name}`)
+        } else {
+            console.log(`Remotecontrol playerchange/show event ! New player : ${player}`)
+        }
+
         releaseCurrentPlayer();
         currentPlayer = player;
 
@@ -848,7 +854,8 @@ export default function () {
         });
     }
 
-    function onPlayerChange() {
+    function onPlayerChange(params) {
+        console.log(`Remotecontrol onPlayerChange : ${params}`);
         bindToPlayer(dlg, playbackManager.getCurrentPlayer());
     }
 
@@ -911,7 +918,6 @@ export default function () {
         bindEvents(context);
         context.querySelector('.sendMessageForm').addEventListener('submit', onMessageSubmit);
         context.querySelector('.typeTextForm').addEventListener('submit', onSendStringSubmit);
-        Events.on(playbackManager, 'playerchange', onPlayerChange);
 
         if (layoutManager.tv) {
             const positionSlider = context.querySelector('.nowPlayingPositionSlider');
@@ -922,11 +928,13 @@ export default function () {
 
     function onDialogClosed() {
         releaseCurrentPlayer();
+        console.log("Remotecontrol removing playerchange listener");
         Events.off(playbackManager, 'playerchange', onPlayerChange);
         lastPlayerState = null;
     }
 
     function onShow(context) {
+        Events.on(playbackManager, 'playerchange', onPlayerChange);
         bindToPlayer(context, playbackManager.getCurrentPlayer());
     }
 
