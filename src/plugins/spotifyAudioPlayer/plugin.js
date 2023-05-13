@@ -4,6 +4,7 @@ import profileBuilder from '../../scripts/browserDeviceProfile';
 import { PluginType } from '../../types/plugin.ts';
 import Events from '../../utils/events.ts';
 import ServerConnections from '../../components/ServerConnections';
+import toast from '../../components/toast/toast';
 
 function getDefaultProfile() {
     return profileBuilder({});
@@ -115,12 +116,20 @@ class SpotifyAudioPlayer {
                 Events.trigger(this, 'playing');
             } else if (resp.status == 401) {
                 console.log("Spotify API authorization error");
-                this.ensureConnected(true); // TODO: Auto-retry play if this succeeds ?
+                toast("Spotify player not connected, reconnecting...");
+                this.ensureConnected(true);
+                if (option.retry !== false) {
+                    option.retry = false;
+                    self.play(options);
+                }
             } else if (resp.status == 403) {
+                toast("Spotify player connection error.");
+                // This indicates a bug somewhere and is probably not something we can recover from.
                 console.error("Spotify API play OAuth error");
                 clearInterval(this.updateInterval);
             } else if (resp.status == 404) {
                 // This happens when the device id is not valid anymore
+                toast("Spotify player connection expired, reconnecting...");
                 console.error("Spotify API device not found");
                 this.playerInstance = null;
                 this.ensureConnected(true);
@@ -216,7 +225,13 @@ class SpotifyAudioPlayer {
         // We are forced to reconnect, or we never connected at all, or we tried to connect but it failed :
         if (forceReconnect === true || this.connectingPromise === null || this.playerInstance === null) {
             this.connectingPromise = this.spotifyReconnect();
-            return await Promise.resolve(this.connectingPromise);
+            let connectionResult = await Promise.resolve(this.connectingPromise);
+            if (connectionResult) {
+                toast("Spotify player connected.");
+            } else {
+                toast("Spotify player connection failed.");
+            }
+            return connectionResult;
         }
 
         // We are already connected
@@ -268,9 +283,10 @@ class SpotifyAudioPlayer {
                 await Promise.race([readyPromise, new Promise((resolve, reject) => {
                     setTimeout(() => {
                         // if we're neither ready nor failed after 2s assume something has gone wrong
+                        // TODO: retry connection ?
                         console.log("Spotify client ready timeout expired");
                         reject();
-                    }, 2000);
+                    }, 3000);
                 })]);
             } else {
                 console.log("Spotify player connection failed");
@@ -305,7 +321,7 @@ class SpotifyAudioPlayer {
     async stop(destroyPlayer) {
         // cancelFadeTimeout();
         console.debug('spotify stop, destroyPlayer : ' + destroyPlayer);
-        this.pause();
+        await this.player.pause();
         this.onEnded();
         Events.trigger(this, 'timeupdate');
         if (destroyPlayer) {
@@ -385,7 +401,6 @@ class SpotifyAudioPlayer {
     }
 
     currentSrc() {
-        console.log(`Spotify plugin currentSrc : ${this._currentSrc}`);
         return this._currentSrc;
     }
 
