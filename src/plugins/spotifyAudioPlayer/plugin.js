@@ -118,9 +118,9 @@ class SpotifyAudioPlayer {
                 console.log("Spotify API authorization error");
                 toast("Spotify player not connected, reconnecting...");
                 this.ensureConnected(true);
-                if (option.retry !== false) {
-                    option.retry = false;
-                    self.play(options);
+                if (options.retry !== false) {
+                    options.retry = false;
+                    this.play(options);
                 }
             } else if (resp.status == 403) {
                 toast("Spotify player connection error.");
@@ -206,6 +206,10 @@ class SpotifyAudioPlayer {
                 console.log(`Spotify client ${device_id} has gone offline`);
             });
 
+            this.player.on('playback_error', ({ message }) => {
+                console.error('Failed to perform playback', message);
+            });
+
             this.ensureConnected();
         }
 
@@ -258,18 +262,18 @@ class SpotifyAudioPlayer {
                     resolve();
                 });
 
-                self.player.addListener('initialization_error', ({ message }) => {
+                self.player.on('initialization_error', ({ message }) => {
                     console.error(`Spotify client init error ${message}`);
                     reject();
                 });
 
-                self.player.addListener('authentication_error', ({ message }) => {
+                self.player.on('authentication_error', ({ message }) => {
                     self.token = null; // This token must be invalid
                     console.error(`Spotify client auth error ${message}`);
                     reject();
                 });
 
-                self.player.addListener('account_error', ({ message }) => {
+                self.player.on('account_error', ({ message }) => {
                     console.error(`Spotify client account error ${message}`);
                     reject();
                 });
