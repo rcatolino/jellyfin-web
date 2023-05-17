@@ -47,6 +47,127 @@ function supportsFade() {
     return !browser.tv;
 }
 
+class SpotifyToken {
+    constructor() {
+        this.token = null;
+        this.getPromise = null;
+        this.devices = null;
+    }
+
+    isValidDevice(deviceId) {
+        if (this.devices === null) {
+            // our access token has not been verified !
+            console.log("Warning, checking for a valid device but the access token has not been verified yet");
+            return false;
+        }
+
+        for (const dev of this.devices) {
+            if (dev.id == deviceId) {
+                return true;
+            }
+        }
+
+        console.log(`Current deviceId ${deviceId} has not been found among valid devices ${JSON.stringify(this.devices)}`)
+        return false;
+    }
+
+    markInvalid() {
+        if (this.getPromise === null) {
+            // Token is not currently being renewed, we can set it to null
+            this.token = null;
+        }
+    }
+
+    async getDevices() {
+        let req = new Request("https://api.spotify.com/v1/me/player/devices", {
+            method: "GET",
+            headers: { Authorization: `Bearer ${this.token}` }
+        });
+        let resp = await fetch(req);
+        // let json = await resp.json();
+        console.log(`Spotify get devices status : ${resp.status}`);
+        if (resp.status >= 200 && resp.status < 300) {
+            // Token valid
+            const body = await resp.json();
+            this.devices = body.devices;
+            return true;
+        } else if (resp.status >= 400 && resp.status < 500) {
+            // Token invalid, refresh token
+            console.log("Spotify API token probably expired, invalidate it");
+            this.token = null;
+        } else {
+            console.log("Spotify API Server error");
+        }
+
+        return false;
+    }
+
+    async get() {
+        if (this.getPromise !== null) {
+            console.log("Token get/refresh already in progress, waiting for existing promise to resolve");
+            return await Promise.resolve(this.getPromise);
+        }
+
+        console.log("Starting Token get/refresh");
+        this.getPromise = this.getOrRefresh();
+        let token = null;
+        try {
+            token = await Promise.resolve(this.getPromise);
+        } catch (error) {
+            throw error;
+        } finally {
+            console.log("Token get/refresh ended");
+            this.getPromise = null; // Get/Refresh is done (or failed)
+        }
+
+        return token;
+    }
+
+    async getOrRefresh() {
+        const apiClient = ServerConnections.currentApiClient();
+        if (this.token === null) {
+            // We don't have any token, get one
+            const tokenUrl = apiClient.getUrl('Spotify/AccessToken');
+            let resp = await apiClient.getJSON(tokenUrl);
+            console.log(`Spotify auth, get token response : ${JSON.stringify(resp)}`);
+            if (resp.AccessToken !== undefined && resp.AccessToken !== null) {
+                this.token = resp.AccessToken;
+            } else if (resp.RedirectURL !== undefined && resp.RedirectURL !== null) {
+                window.location.assign(resp.RedirectURL);
+            } else {
+                throw new Error(`Invalid response from server ${JSON.stringify(resp)}`);
+            }
+        }
+
+        // Check current token validity
+        if (!await this.getDevices()) {
+            // We couldn't get the devices, this token must have expired, refresh it
+            const tokenUrl = apiClient.getUrl('Spotify/RefreshToken');
+            let resp = await apiClient.getJSON(tokenUrl);
+            console.log(`Spotify auth, refresh token response : ${JSON.stringify(resp)}`);
+            if (resp.AccessToken !== undefined && resp.AccessToken !== null) {
+                this.token = resp.AccessToken;
+            } else if (resp.RedirectURL !== undefined && resp.RedirectURL !== null) {
+                window.location.assign(resp.RedirectURL);
+            } else {
+                throw new Error(`Invalid response from server ${JSON.stringify(resp)}`);
+            }
+
+            if (!await this.getDevices()) {
+                // This shouldn't happen, it means spotify sent us an invalid refreshed token.
+                throw new Error("Error, refreshed token is still invalid");
+            }
+        };
+
+        if (this.token === null) {
+            console.log("Error, token should never be null here !");
+            throw new Error("Spotify token.get() bug");
+        }
+
+        return this.token;
+    }
+}
+
 class SpotifyAudioPlayer {
     constructor() {
         this.connecting = false;
@@ -55,7 +176,7 @@ class SpotifyAudioPlayer {
         this.type = PluginType.MediaPlayer;
         this.id = 'spotifyaudioplayer';
         this.isLocalPlayer = true; // We play in this browser not a different one
-        this.token = null;
+        this.token = new SpotifyToken();
         this.authTries = 0;
         this.playerInstance = null;
         this.updateInterval = null;
@@ -81,8 +202,9 @@ class SpotifyAudioPlayer {
         this.state.lastCheck = new Date();
         this.state.duration = 0;
         this.state.position = 0;
+        const token = await this.token.get(); // This should always return a valid access token (or throw an error);
         const status = await this.ensureConnected();
-        if (!status || this.token === null) {
+        if (!status) {
             console.log(`spotify play, cannot play ${options.item.Name} because access token is null and reconnection failed`);
             return;
         }
@@ -101,7 +223,7 @@ class SpotifyAudioPlayer {
                     // TOOD: start at options.playerStartPositionTicks
                     uris: [uri],
                 }),
-                headers: { Authorization: `Bearer ${this.token}` }
+                headers: { Authorization: `Bearer ${token}` }
             });
 
             Events.trigger(this, 'waiting');
@@ -153,33 +275,10 @@ class SpotifyAudioPlayer {
     }
 
     async spotifyAuth(cb) {
-        const apiClient = ServerConnections.currentApiClient();
-        let tokenUrl = null;
-        if (this.authTries == 0 && this.token !== null) {
-            // We have a cached token and we haven't tried to use it yet
-            this.authTries += 1;
-            return cb(this.token);
-        } else if (this.authTries > 0 && this.token !== null) {
-            // We've tried to auth with this token before and it doesn't work. Invalidate it, then try to refresh.
-            this.token = null;
-            tokenUrl = apiClient.getUrl('Spotify/RefreshToken');
-        } else if (this.token == null) {
-            // We don't have any cached token, get one
-            tokenUrl = apiClient.getUrl('Spotify/AccessToken');
-        }
-
         try {
-            let resp = await apiClient.getJSON(tokenUrl); // We have to wait until the user is logged in
-            console.log(`Spotify auth, get/refresh token response : ${JSON.stringify(resp)}`);
-            if (resp.AccessToken != null) {
-                this.token = resp.AccessToken;
-                this.authTries += 1;
-                cb(resp.AccessToken);
-            } else if (resp.RedirectURL != null) {
-                window.location.assign(resp.RedirectURL);
-            }
+            cb(await this.token.get());
         } catch (error) {
-            console.log(`Spotify auth with refreshed token, RefreshToken error : ${JSON.stringify(error)}`);
+            console.log(`Spotify get/refresh token error : ${error.message}`);
             cb(); // cb *has* to be called, otherwise the player.connect() promise will never resolve/reject
         }
     }
@@ -227,7 +326,7 @@ class SpotifyAudioPlayer {
         }
 
         // We are forced to reconnect, or we never connected at all, or we tried to connect but it failed :
-        if (forceReconnect === true || this.connectingPromise === null || this.playerInstance === null) {
+        if (forceReconnect === true || this.connectingPromise === null || this.playerInstance === null || !this.token.isValidDevice(this.playerInstance.device_id)) {
             this.connectingPromise = this.spotifyReconnect();
             let connectionResult = await Promise.resolve(this.connectingPromise);
             if (connectionResult) {
@@ -268,7 +367,7 @@ class SpotifyAudioPlayer {
                 });
 
                 self.player.on('authentication_error', ({ message }) => {
-                    self.token = null; // This token must be invalid
+                    self.token.markInvalid(); // This token must be invalid, this shouldn't happen if we take care to use this.token.get() in the spotifyAuth callback
                     console.error(`Spotify client auth error ${message}`);
                     reject();
                 });
@@ -284,14 +383,20 @@ class SpotifyAudioPlayer {
             if (status) {
                 console.log("Spotify player connection succeeded");
                 // Make sure the player is ready :
+                let timeoutId = null;
                 await Promise.race([readyPromise, new Promise((resolve, reject) => {
-                    setTimeout(() => {
+                    timeoutId = setTimeout(() => {
                         // if we're neither ready nor failed after 2s assume something has gone wrong
                         // TODO: retry connection ?
                         console.log("Spotify client ready timeout expired");
+                        timeoutId = null;
                         reject();
                     }, 3000);
                 })]);
+                if (timeoutId !== null) {
+                    // This is just to prevent a spurious 'timeout expired' message on the console
+                    clearTimeout(timeoutId);
+                }
             } else {
                 console.log("Spotify player connection failed");
             }
