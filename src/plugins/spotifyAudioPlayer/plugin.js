@@ -306,7 +306,7 @@ class SpotifyAudioPlayer {
             });
 
             this.player.on('playback_error', ({ message }) => {
-                console.error('Failed to perform playback', message);
+                console.log('Failed to perform playback', message);
             });
 
             this.ensureConnected();
