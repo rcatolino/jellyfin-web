@@ -239,7 +239,8 @@ class SpotifyAudioPlayer {
             } else if (resp.status == 401) {
                 console.log("Spotify API authorization error");
                 toast("Spotify player not connected, reconnecting...");
-                this.ensureConnected(true);
+                clearInterval(this.updateInterval);
+                this.ensureConnected(true); // no need to await here, there's no point if we don't retry, and if we do this.play() will wait anyway
                 if (options.retry !== false) {
                     options.retry = false;
                     this.play(options);
@@ -254,8 +255,12 @@ class SpotifyAudioPlayer {
                 toast("Spotify player connection expired, reconnecting...");
                 console.error("Spotify API device not found");
                 this.playerInstance = null;
-                this.ensureConnected(true);
                 clearInterval(this.updateInterval);
+                this.ensureConnected(true); // no need to await here, there's no point if we don't retry, and if we do this.play() will wait anyway
+                if (options.retry !== false) {
+                    options.retry = false;
+                    this.play(options);
+                }
             } else if (resp.status == 429) {
                 // TODO: handle rate-limiting somehow ?
                 console.log("Spotify API play failed because of rate-limiting");

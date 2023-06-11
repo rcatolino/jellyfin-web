@@ -275,7 +275,7 @@ function getItems(instance, params, item, sortBy, startIndex, limit) {
         return apiClient[method](apiClient.getCurrentUserId(), modifyQueryWithFilters(instance, {
             StartIndex: startIndex,
             Limit: limit,
-            Fields: 'PrimaryImageAspectRatio,SortName',
+            Fields: 'PrimaryImageAspectRatio,SortName,Path',
             ImageTypeLimit: 1,
             IncludeItemTypes: params.type === 'MusicArtist' || params.type === 'Person' ? null : params.type,
             Recursive: true,
