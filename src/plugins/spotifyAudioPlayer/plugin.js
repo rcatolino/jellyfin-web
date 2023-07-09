@@ -177,7 +177,6 @@ class SpotifyAudioPlayer {
         this.id = 'spotifyaudioplayer';
         this.isLocalPlayer = true; // We play in this browser not a different one
         this.token = new SpotifyToken();
-        this.authTries = 0;
         this.playerInstance = null;
         this.updateInterval = null;
         this.state = {
@@ -346,8 +345,9 @@ class SpotifyAudioPlayer {
         return true;
     }
 
-    async spotifyReconnect() {
+    async spotifyReconnect(canRetry) {
         let status = false;
+        let retry = false;
         this.connecting = true;
         try {
             await this.player.disconnect(); // The doc says player.disconnect() returns void. It's a lie : It returns a promise that resolves to void.
@@ -358,13 +358,15 @@ class SpotifyAudioPlayer {
             this.player.removeListener('account_error');
             const self = this;
             const readyPromise = new Promise((resolve, reject) => {
-                self.player.addListener('ready', (instance) => {
+                let unique = self.player.addListener('ready', (instance) => {
                     // Called (once?) when the spotify player is connected
                     console.log('Spotify client ready with Device ID ', instance.device_id);
-                    self.authTries = 0; // We have successfully logged-in, reset auth try counter.
                     self.playerInstance = instance;
                     resolve();
                 });
+                if (!unique) {
+                    console.warn("Warning, there is already a listener registered for ready event");
+                }
 
                 self.player.on('initialization_error', ({ message }) => {
                     console.error(`Spotify client init error ${message}`);
@@ -386,17 +388,18 @@ class SpotifyAudioPlayer {
             // Warning, if the callback in spotifyAuth is never executed player.connect() will never resolve or reject.
             status = await this.player.connect();
             if (status) {
-                console.log("Spotify player connection succeeded");
+                console.log("Spotify player connection succeeded, waiting for the client to be ready");
                 // Make sure the player is ready :
                 let timeoutId = null;
-                await Promise.race([readyPromise, new Promise((resolve, reject) => {
+                await Promise.race([readyPromise, new Promise((_resolve, reject) => {
                     timeoutId = setTimeout(() => {
                         // if we're neither ready nor failed after 2s assume something has gone wrong
                         // TODO: retry connection ?
-                        console.log("Spotify client ready timeout expired");
+                        // Note : Spotify always fails to send the 'ready' event after a prolonged incactivity period
+                        console.log(`Spotify client ready timeout expired`);
                         timeoutId = null;
-                        reject();
-                    }, 3000);
+                        reject({type: 'ready', retry: true});
+                    }, 2000);
                 })]);
                 if (timeoutId !== null) {
                     // This is just to prevent a spurious 'timeout expired' message on the console
@@ -406,9 +409,14 @@ class SpotifyAudioPlayer {
                 console.log("Spotify player connection failed");
             }
         } catch (error) {
-            console.log(`Spotify player reconnect error : ${error}`);
+            console.log(`Spotify player reconnect error : ${JSON.stringify(error)}`);
             status = false;
+            retry = error.retry;
             this.playerInstance = null;
+        }
+
+        if (canRetry !== false && retry === true) {
+            return await this.spotifyReconnect(false);
         }
 
         this.connecting = false;
